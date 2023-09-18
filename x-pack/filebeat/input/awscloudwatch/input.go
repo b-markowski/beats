@@ -69,6 +69,17 @@ func newInput(config config) (*cloudwatchInput, error) {
 		return nil, fmt.Errorf("failed to initialize AWS credentials: %w", err)
 	}
 
+	if config.AWSConfig.Endpoint != "" {
+		// Add a custom endpointResolver to the awsConfig so that all the requests are routed to this endpoint
+		awsConfig.EndpointResolverWithOptions = awssdk.EndpointResolverWithOptionsFunc(func(service, region string, options ...interface{}) (awssdk.Endpoint, error) {
+			return awssdk.Endpoint{
+				PartitionID:   "aws",
+				URL:           config.AWSConfig.Endpoint,
+				SigningRegion: awsConfig.Region,
+			}, nil
+		})
+	}
+
 	if config.LogGroupARN != "" {
 		logGroupName, regionName, err := parseARN(config.LogGroupARN)
 		if err != nil {
@@ -120,6 +131,10 @@ func (in *cloudwatchInput) Run(inputContext v2.Context, pipeline beat.Pipeline) 
 	}
 	defer client.Close()
 
+	log := inputContext.Logger
+
+	log.Infof("CFG: %+v; AWS CFG: Cred: %+v, Endpoint: %+v", in.config, in.awsConfig.Credentials, in.awsConfig.EndpointResolverWithOptions)
+
 	svc := cloudwatchlogs.NewFromConfig(in.awsConfig, func(o *cloudwatchlogs.Options) {
 		if in.config.AWSConfig.FIPSEnabled {
 			o.EndpointOptions.UseFIPSEndpoint = awssdk.FIPSEndpointStateEnabled
@@ -131,7 +146,6 @@ func (in *cloudwatchInput) Run(inputContext v2.Context, pipeline beat.Pipeline) 
 		return fmt.Errorf("failed to get log group names: %w", err)
 	}
 
-	log := inputContext.Logger
 	in.metrics = newInputMetrics(inputContext.ID, nil)
 	defer in.metrics.Close()
 	cwPoller := newCloudwatchPoller(
