@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -48,8 +49,25 @@ func (im *cloudwatchInputManager) Init(grp unison.Group, mode v2.Mode) error {
 
 func (im *cloudwatchInputManager) Create(cfg *conf.C) (v2.Input, error) {
 	config := defaultConfig()
+
 	if err := cfg.Unpack(&config); err != nil {
 		return nil, err
+	}
+
+	// Workaround for Elastic Agent configuration by Fleet WebUI
+	// Endpoint can be set by using Proxy URL scheme `spc+...` where ... is endpoint URL
+	// In this case Proxy field cannot be use
+	if config.AWSConfig.ProxyUrl != "" {
+		u, err := url.Parse(config.AWSConfig.ProxyUrl)
+		if err != nil {
+			return nil, err
+		}
+
+		if strings.HasPrefix(u.Scheme, "spc+") {
+			u.Scheme = strings.Replace(u.Scheme, "spc+", "", 1)
+			config.AWSConfig.Endpoint = u.String()
+			config.AWSConfig.ProxyUrl = ""
+		}
 	}
 
 	return newInput(config)
@@ -132,8 +150,6 @@ func (in *cloudwatchInput) Run(inputContext v2.Context, pipeline beat.Pipeline) 
 	defer client.Close()
 
 	log := inputContext.Logger
-
-	log.Infof("CFG: %+v; AWS CFG: Cred: %+v, Endpoint: %+v", in.config, in.awsConfig.Credentials, in.awsConfig.EndpointResolverWithOptions)
 
 	svc := cloudwatchlogs.NewFromConfig(in.awsConfig, func(o *cloudwatchlogs.Options) {
 		if in.config.AWSConfig.FIPSEnabled {
